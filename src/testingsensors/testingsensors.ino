@@ -1,100 +1,123 @@
-// --- Libraries ---
-// #include <driver/i2s.h>       // For the microphone (not used yet, but fine to keep for future use)
-#include <Wire.h>               // For I2C communication
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BME280.h>
 #include <SPI.h>
-#include "ADXL362.h"            // Your custom library for the ADXL362
+#include <ADXL362.h>
 
-// --- Pin Definitions ---
+#define SEALEVELPRESSURE_HPA (1013.25)
 
-// I2C Pins (for BME280)
+// Pin definitions
 #define I2C_SDA 8
 #define I2C_SCL 9
+#define SPI_CS_ADXL 10
+#define SPI_MOSI 11
+#define SPI_MISO 12
+#define SPI_SCK 13
 
-// SPI Pins (for ADXL362)
-// FIX: The ADXL362 needs a Chip Select (CS) pin. The SPI library manages MISO, MOSI, and SCLK.
-#define ADXL362_CS_PIN 10 // Let's use GPIO 10 for Chip Select
-
-// --- Sensor Objects & Configuration ---
-Adafruit_BME280 bme; // FIX: Uncommented this line
+// Sensor objects
+Adafruit_BME280 bme;
 ADXL362 xl;
 
-// --- Timing Control ---
-// IMPROVEMENT: Use one timer to control when we read from all sensors.
-unsigned long lastReadTime = 0;
-const long readInterval = 2000; // Read all sensors every 2 seconds (2000 ms)
+// Sensor data variables
+float bme_temperature, bme_humidity, bme_pressure, bme_altitude;
+int16_t adxl_x, adxl_y, adxl_z, adxl_temperature;
+
+// WiFi credentials
+const char* ssid = "dammanh";  // Enter SSID here
+const char* password = "15g119769";  // Enter Password here
+
+WebServer server(80);
 
 void setup() {
-    // 1. Start Serial Communication
-    Serial.begin(115200);
-    while (!Serial); // Wait for Serial to be ready, good practice for some boards
-    Serial.println("Beehive Monitor Startup...");
+  Serial.begin(115200);
+  delay(100);
 
-    // 2. Initialize I2C Bus and BME280 Sensor
-    Wire.begin(I2C_SDA, I2C_SCL);
-    Serial.println("I2C bus initialized.");
+  // Initialize I2C for BME280
+  Wire.begin(I2C_SDA, I2C_SCL);
+  if (!bme.begin(0x76, &Wire)) {
+    Serial.println("BME280 not found!");
+    while (1);
+  }
 
-    if (!bme.begin(0x76)) { // 0x76 is the default I2C address
-        Serial.println("FATAL: Could not find a valid BME280 sensor, check wiring!");
-        while (1) delay(10); // Halt execution
-    }
-    Serial.println("BME280 sensor found and initialized.");
+  // Initialize SPI for ADXL362
+  SPI.begin(SPI_SCK, SPI_MISO, SPI_MOSI, SPI_CS_ADXL);
+  xl.begin(SPI_CS_ADXL);  // Setup SPI protocol, issue device soft reset
+  xl.beginMeasure();      // Switch ADXL362 to measure mode
+  Serial.println("ADXL362 initialized.");
 
-    // 3. Initialize SPI Bus and ADXL362 Sensor
-    // The SPI bus is initialized automatically by the ADXL362 library's begin() call
-    // FIX: Pass the correct Chip Select pin to the begin() function.
-    xl.begin(ADXL362_CS_PIN);
-    xl.beginMeasure(); // Switch ADXL362 to measurement mode
-    Serial.println("ADXL362 sensor found and initialized.");
+  // Connect to WiFi
+  Serial.print("Connecting to ");
+  Serial.println(ssid);
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
+  }
+  Serial.println("");
+  Serial.println("WiFi connected..!");
+  Serial.print("Got IP: "); Serial.println(WiFi.localIP());
 
-    Serial.println("\nSetup complete. Starting measurements...");
-    delay(500);
+  // Setup web server routes
+  server.on("/", handle_OnConnect);
+  server.onNotFound(handle_NotFound);
+  server.begin();
+  Serial.println("HTTP server started");
 }
 
 void loop() {
-    // IMPROVEMENT: Use one non-blocking timer to read and print all sensor data.
-    if (millis() - lastReadTime > readInterval) {
-        readAndPrintSensorData();
-        lastReadTime = millis();
-    }
+  server.handleClient();
+
+  // Read ADXL362 data for serial output
+  xl.readXYZTData(adxl_x, adxl_y, adxl_z, adxl_temperature);
+  Serial.print("XVALUE="); Serial.print(adxl_x);
+  Serial.print("\tYVALUE="); Serial.print(adxl_y);
+  Serial.print("\tZVALUE="); Serial.print(adxl_z);
+  Serial.print("\tTEMPERATURE="); Serial.println(adxl_temperature);
+  delay(100);  // Short delay for serial readability
 }
 
-// IMPROVEMENT: A single function to handle reading and printing for all sensors.
-void readAndPrintSensorData() {
-    Serial.println("\n---------------------------------");
-    Serial.print("Timestamp: ");
-    Serial.print(millis() / 1000);
-    Serial.println(" seconds");
-    Serial.println("---------------------------------");
+void handle_OnConnect() {
+  // Read BME280 data
+  bme_temperature = bme.readTemperature();
+  bme_humidity = bme.readHumidity();
+  bme_pressure = bme.readPressure() / 100.0F;
+  bme_altitude = bme.readAltitude(SEALEVELPRESSURE_HPA);
 
-    // --- Read and Print BME280 Data ---
-    Serial.println("BME280 (Environment):");
-    Serial.print("  Temperature: ");
-    Serial.print(bme.readTemperature());
-    Serial.println(" *C");
+  // Read ADXL362 data for web display
+  xl.readXYZTData(adxl_x, adxl_y, adxl_z, adxl_temperature);
 
-    Serial.print("  Pressure:    ");
-    Serial.print(bme.readPressure() / 100.0F);
-    Serial.println(" hPa");
+  // Send HTML response
+  server.send(200, "text/html", SendHTML(bme_temperature, bme_humidity, bme_pressure, bme_altitude, adxl_x, adxl_y, adxl_z, adxl_temperature));
+}
 
-    Serial.print("  Humidity:    ");
-    Serial.print(bme.readHumidity());
-    Serial.println(" %");
+void handle_NotFound() {
+  server.send(404, "text/plain", "Not found");
+}
 
-    // --- Read and Print ADXL362 Data ---
-    int16_t x, y, z, temp;
-    // read all three axis in burst to ensure all measurements correspond to same sample time
-    xl.readXYZTData(x, y, z, temp);
-
-    Serial.println("\nADXL362 (Vibration & Temp):");
-    Serial.print("  X-Axis: ");
-    Serial.print(x);
-    Serial.print("\t  Y-Axis: ");
-    Serial.print(y);
-    Serial.print("\t  Z-Axis: ");
-    Serial.println(z);
-    Serial.print("  Sensor Temp: ");
-    Serial.println(temp); // Assuming your library provides temperature
-    Serial.println("---------------------------------\n");
+String SendHTML(float temp, float hum, float press, float alt, int16_t x, int16_t y, int16_t z, int16_t temp_adxl) {
+  String ptr = "<!DOCTYPE html> <html>\n";
+  ptr += "<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0, user-scalable=no\">\n";
+  ptr += "<title>Beehive Monitor</title>\n";
+  ptr += "<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}\n";
+  ptr += "body{margin-top: 50px;} h1 {color: #444444;margin: 50px auto 30px;}\n";
+  ptr += "p {font-size: 24px;color: #444444;margin-bottom: 10px;}\n";
+  ptr += "</style>\n";
+  ptr += "</head>\n";
+  ptr += "<body>\n";
+  ptr += "<div id=\"webpage\">\n";
+  ptr += "<h1>Beehive Monitor</h1>\n";
+  ptr += "<p>Temperature (BME280): "; ptr += temp; ptr += "&deg;C</p>";
+  ptr += "<p>Humidity (BME280): "; ptr += hum; ptr += "%</p>";
+  ptr += "<p>Pressure (BME280): "; ptr += press; ptr += "hPa</p>";
+  ptr += "<p>Altitude (BME280): "; ptr += alt; ptr += "m</p>";
+  ptr += "<p>X-Axis (ADXL362): "; ptr += x; ptr += "</p>";
+  ptr += "<p>Y-Axis (ADXL362): "; ptr += y; ptr += "</p>";
+  ptr += "<p>Z-Axis (ADXL362): "; ptr += z; ptr += "</p>";
+  ptr += "<p>Temperature (ADXL362): "; ptr += temp_adxl; ptr += "</p>";
+  ptr += "</div>\n";
+  ptr += "</body>\n";
+  ptr += "</html>\n";
+  return ptr;
 }
