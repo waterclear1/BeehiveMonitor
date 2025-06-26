@@ -25,8 +25,8 @@ float bme_temperature, bme_humidity, bme_pressure, bme_altitude;
 int16_t adxl_x, adxl_y, adxl_z, adxl_temperature;
 
 // WiFi credentials
-const char* ssid = "dammanh";  // Enter SSID here
-const char* password = "15g119769";  // Enter Password here
+const char* ssid = "aaa";  // Enter SSID here
+const char* password = "123";  // Enter Password here
 
 WebServer server(80);
 

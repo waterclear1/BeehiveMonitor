@@ -11,8 +11,8 @@ Adafruit_BME280 bme;
 float temperature, humidity, pressure, altitude;
 
 /*Put your SSID & Password*/
-const char* ssid = "dammanh";  // Enter SSID here
-const char* password = "15g119769";  //Enter Password here
+const char* ssid = "aaa";  // Enter SSID here
+const char* password = "123";  //Enter Password here
 
 WebServer server(80);             
  
